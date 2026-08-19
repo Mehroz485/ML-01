@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Which Pages Should You Refresh First? A Content-Decline Priority Model</title>
+<meta name="description" content="A content refresh priority model built on FlyRank's search warehouse — and why a naive validation split reported a precision@50 of 0.596 when the honest, client-grouped number is 0.448.">
+
+<meta property="og:title" content="Which Pages Should You Refresh First?">
+<meta property="og:description" content="A content-decline priority model, validated honestly. The naive number was 0.596. The real number is 0.448. Here's why that gap matters.">
+<meta property="og:type" content="article">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Which Pages Should You Refresh First?">
+<meta name="twitter:description" content="A content-decline priority model, validated honestly — and the leakage that inflated the naive number by 15 points.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400;1,500&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg: #12151c;
+    --surface: #1a1e29;
+    --surface-2: #202537;
+    --text: #edeef2;
+    --text-muted: #8d93a6;
+    --text-faint: #5b6274;
+    --teal: #52d6c8;
+    --teal-dim: #2e5a55;
+    --coral: #f2895d;
+    --coral-dim: #5c3c2c;
+    --amber: #e8b95a;
+    --border: #2a2f3d;
+    --display: 'Space Grotesk', -apple-system, 'Segoe UI', sans-serif;
+    --body: 'Newsreader', Georgia, 'Times New Roman', serif;
+    --mono: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
+    --max: 780px;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { animation: none !important; transition: none !important; }
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--body);
+    font-size: 19px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--teal); text-decoration-color: var(--teal-dim); text-underline-offset: 3px; }
+  a:hover { text-decoration-color: var(--teal); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+
+  ::selection { background: var(--teal-dim); color: var(--text); }
+
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+  .wrap-wide { max-width: 980px; margin: 0 auto; padding: 0 24px; }
+
+  h1, h2, h3, .eyebrow, .stat-label, nav, .mono {
+    font-family: var(--display);
+    letter-spacing: -0.01em;
+  }
+
+  /* ---------- Nav ---------- */
+  nav.top {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(18,21,28,0.88);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav.top .wrap-wide { display: flex; align-items: center; justify-content: space-between; height: 56px; }
+  nav.top .brand { font-weight: 600; font-size: 14px; color: var(--text); text-decoration: none; }
+  nav.top .brand .dot { color: var(--coral); }
+  nav.top .links { display: flex; gap: 20px; list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  nav.top .links a { color: var(--text-muted); text-decoration: none; }
+  nav.top .links a:hover { color: var(--text); }
+  nav.top .links { display: none; }
+  @media (min-width: 720px) { nav.top .links { display: flex; } }
+
+  /* ---------- Hero ---------- */
+  header.hero { padding: 88px 0 72px; border-bottom: 1px solid var(--border); }
+  .eyebrow {
+    font-size: 12.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.12em;
+    color: var(--coral); margin: 0 0 20px;
+  }
+  h1.title {
+    font-size: clamp(34px, 5.4vw, 52px);
+    line-height: 1.08;
+    font-weight: 600;
+    margin: 0 0 22px;
+    color: var(--text);
+    max-width: 15ch;
+  }
+  p.dek {
+    font-family: var(--body);
+    font-style: italic;
+    font-size: 21px;
+    color: var(--text-muted);
+    max-width: 46ch;
+    margin: 0 0 34px;
+    line-height: 1.5;
+  }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 22px; font-family: var(--mono); font-size: 12.5px; color: var(--text-faint); }
+  .meta-row span b { color: var(--text-muted); font-weight: 500; }
+
+  /* ---------- Sections ---------- */
+  section { padding: 64px 0; border-bottom: 1px solid var(--border); }
+  section:last-of-type { border-bottom: none; }
+  .section-num {
+    font-family: var(--mono); font-size: 12.5px; color: var(--text-faint);
+    letter-spacing: 0.08em; margin-bottom: 10px;
+  }
+  h2.head {
+    font-size: clamp(26px, 3.6vw, 32px);
+    font-weight: 600;
+    margin: 0 0 28px;
+    color: var(--text);
+  }
+  h3.sub {
+    font-size: 19px; font-weight: 600; color: var(--text);
+    margin: 36px 0 12px;
+  }
+  p { margin: 0 0 18px; color: var(--text); }
+  section p:last-child { margin-bottom: 0; }
+  .lede { font-size: 21px; color: var(--text); }
+  strong { color: var(--text); font-weight: 600; }
+  .muted { color: var(--text-muted); }
+
+  ul.plain { margin: 0 0 18px; padding-left: 22px; }
+  ul.plain li { margin-bottom: 10px; }
+
+  .num { font-family: var(--mono); font-weight: 500; }
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--teal);
+    border-radius: 4px;
+    padding: 20px 24px;
+    margin: 24px 0;
+    font-size: 17px;
+  }
+  .callout.warn { border-left-color: var(--coral); }
+  .callout p:last-child { margin-bottom: 0; }
+
+  /* ---------- Abstract card ---------- */
+  .abstract-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 32px 32px;
+    margin-top: 8px;
+  }
+  .abstract-card .label {
+    font-family: var(--mono); font-size: 11.5px; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--text-faint); margin-bottom: 14px;
+  }
+  .abstract-card p { font-size: 18px; line-height: 1.7; }
+
+  /* ---------- Stat grid ---------- */
+  .stat-grid {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px;
+    background: var(--border); border: 1px solid var(--border); border-radius: 8px;
+    overflow: hidden; margin: 28px 0;
+  }
+  @media (min-width: 640px) { .stat-grid { grid-template-columns: repeat(4, 1fr); } }
+  .stat-cell { background: var(--surface); padding: 22px 18px; }
+  .stat-cell .stat-num { font-family: var(--mono); font-size: 26px; font-weight: 600; color: var(--teal); }
+  .stat-cell .stat-lbl { font-size: 13px; color: var(--text-muted); margin-top: 6px; line-height: 1.4; }
+
+  /* ---------- Funnel ---------- */
+  .funnel { margin: 32px 0; }
+  .funnel-row { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+  .funnel-bar-track { flex: 1; height: 34px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+  .funnel-bar-fill { height: 100%; background: linear-gradient(90deg, var(--teal-dim), var(--teal)); border-radius: 4px; }
+  .funnel-label { font-family: var(--mono); font-size: 13px; color: var(--text-muted); width: 100%; margin-bottom: 6px; display: flex; justify-content: space-between; }
+  .funnel-label b { color: var(--text); font-weight: 500; }
+
+  /* ---------- CTR ladder (signature chart) ---------- */
+  .ladder { margin: 32px 0 8px; }
+  .ladder-row {
+    display: grid; grid-template-columns: 88px 1fr 76px; align-items: center;
+    gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--border);
+  }
+  .ladder-row:first-child { border-top: 1px solid var(--border); }
+  .ladder-pos { font-family: var(--mono); font-size: 13px; color: var(--text-muted); }
+  .ladder-pos b { color: var(--text); font-weight: 500; }
+  .ladder-track { height: 22px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+  .ladder-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--coral-dim), var(--coral)); }
+  .ladder-val { font-family: var(--mono); font-size: 13.5px; color: var(--text); text-align: right; font-weight: 500; }
+  .ladder-n { font-family: var(--mono); font-size: 11px; color: var(--text-faint); text-align: right; }
+  .ladder-caption { font-size: 14.5px; color: var(--text-muted); margin-top: 16px; font-style: italic; }
+
+  /* ---------- Precision comparison chart ---------- */
+  .precision-chart { margin: 32px 0 8px; display: flex; flex-direction: column; gap: 18px; }
+  .pbar-row { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  .pbar-label-line { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--mono); font-size: 13.5px; }
+  .pbar-label-line .name { color: var(--text); }
+  .pbar-label-line .tag { font-size: 11px; color: var(--text-faint); margin-left: 8px; font-weight: 400; }
+  .pbar-label-line .val { color: var(--text); font-weight: 600; }
+  .pbar-track { height: 30px; background: var(--surface-2); border-radius: 4px; position: relative; overflow: hidden; }
+  .pbar-fill { height: 100%; border-radius: 4px; position: relative; }
+  .pbar-fill.bad { background: linear-gradient(90deg, var(--coral-dim), var(--coral)); }
+  .pbar-fill.good { background: linear-gradient(90deg, var(--teal-dim), var(--teal)); }
+  .pbar-errbar { position: absolute; top: 0; bottom: 0; width: 2px; background: rgba(255,255,255,0.55); }
+  .base-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--text-faint); }
+  .base-line-label { position: absolute; top: -20px; font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); white-space: nowrap; }
+
+  /* ---------- Archetype breakdown ---------- */
+  .archetype-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin: 28px 0; }
+  @media (min-width: 640px) { .archetype-grid { grid-template-columns: 1fr 1fr; } }
+  .archetype-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 22px;
+    border-top: 3px solid var(--border-top-color, var(--teal));
+  }
+  .archetype-card .rank-pct { font-family: var(--mono); font-size: 28px; font-weight: 600; color: var(--text); }
+  .archetype-card .rank-n { font-family: var(--mono); font-size: 13px; color: var(--text-faint); margin-top: 2px; }
+  .archetype-card .rank-name { font-family: var(--display); font-weight: 600; font-size: 15.5px; margin: 12px 0 6px; }
+  .archetype-card .rank-desc { font-size: 15px; color: var(--text-muted); line-height: 1.5; }
+  .archetype-card.priority { border-top-color: var(--coral); }
+  .archetype-card.content { border-top-color: var(--amber); }
+  .archetype-card.snippet { border-top-color: var(--teal); }
+  .archetype-card.monitor { border-top-color: var(--text-faint); }
+
+  /* ---------- Table ---------- */
+  table.data-table { width: 100%; border-collapse: collapse; margin: 24px 0; font-size: 15.5px; }
+  table.data-table th, table.data-table td {
+    text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border);
+    font-family: var(--mono); font-size: 14px;
+  }
+  table.data-table th { color: var(--text-faint); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em; }
+  table.data-table td { color: var(--text); }
+  table.data-table tr:last-child td { border-bottom: none; }
+
+  /* ---------- No-go list ---------- */
+  .nogo-list { list-style: none; margin: 20px 0; padding: 0; }
+  .nogo-list li {
+    display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border);
+    font-size: 16.5px; color: var(--text);
+  }
+  .nogo-list li:last-child { border-bottom: none; }
+  .nogo-list .x { color: var(--coral); font-family: var(--mono); font-weight: 600; flex-shrink: 0; }
+
+  /* ---------- Repro links ---------- */
+  .repro-grid { display: grid; grid-template-columns: 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 24px 0; }
+  @media (min-width: 640px) { .repro-grid { grid-template-columns: 1fr 1fr; } }
+  .repro-item { background: var(--surface); padding: 16px 18px; display: flex; flex-direction: column; gap: 4px; text-decoration: none; }
+  .repro-item:hover { background: var(--surface-2); }
+  .repro-item .w { font-family: var(--mono); font-size: 12px; color: var(--coral); font-weight: 600; }
+  .repro-item .t { font-family: var(--display); font-size: 14.5px; color: var(--text); }
+
+  /* ---------- Footer ---------- */
+  footer { padding: 48px 0 64px; }
+  footer p { color: var(--text-muted); font-size: 15px; }
+  footer .credit-box {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 24px 28px; margin-bottom: 24px;
+  }
+  footer a.back-top { font-family: var(--mono); font-size: 12.5px; color: var(--text-faint); text-decoration: none; }
+  footer a.back-top:hover { color: var(--text-muted); }
+
+  .flag-icon { color: var(--coral); }
+  .check-icon { color: var(--teal); }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap-wide">
+    <a href="#top" class="brand">refresh-priority<span class="dot">.</span>paper</a>
+    <ul class="links">
+      <li><a href="#data">Data</a></li>
+      <li><a href="#method">Method</a></li>
+      <li><a href="#results">Results</a></li>
+      <li><a href="#limitations">Limits</a></li>
+      <li><a href="#recommendations">Playbook</a></li>
+      <li><a href="#repro">Repro</a></li>
+    </ul>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <p class="eyebrow">Content Refresh &amp; Opportunity Scoring — FlyRank ML Internship Capstone</p>
+    <h1 class="title">Which pages should you refresh first?</h1>
+    <p class="dek">A content-decline priority model built on real search data — and the 15-point validation number that turned out not to be real.</p>
+    <div class="meta-row">
+      <span><b>Lane</b> Refresh / Content Opportunity Scoring</span>
+      <span><b>Data window</b> March 2026</span>
+      <span><b>Scope</b> 55 clients, 331,437 pages</span>
+      <span><b>Honest precision@50</b> 0.448</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ABSTRACT -->
+  <section id="abstract">
+    <div class="section-num">Abstract</div>
+    <div class="abstract-card">
+      <p>Given a fixed weekly review capacity, which content pages should a team look at first, and with what action? Built on FlyRank's search warehouse — 9.8M daily performance rows across 331,437 pages and 55 clients for March 2026 — this model scores each page's risk of a within-month impression decline, using only the first half of the month's data. A 4-feature logistic regression, validated with a client-grouped split, reaches a precision@50 of <strong>0.448</strong> against a 0.291 base rate — modest, real, above-chance signal. A naive random row split on the identical data reported <strong>0.596</strong> at the same K: a result that does not survive once same-client leakage between train and test is removed, and the gap between those two numbers is the central finding of this paper. The output is a four-way ranked action playbook — priority refresh, content-only refresh, snippet cleanup, or monitor — intended for human review, not automation.</p>
+    </div>
+  </section>
+
+  <!-- INTRODUCTION -->
+  <section id="intro">
+    <div class="section-num">01 — Introduction</div>
+    <h2 class="head">The decision this supports</h2>
+    <p class="lede">A content team has more pages than time. Every week, someone has to decide which handful get a look — a rewrite, a refreshed title, or nothing — out of a warehouse holding hundreds of thousands.</p>
+    <p>Picking wrong is expensive in two directions. Reviewing a page that was already fine wastes a writer's afternoon. Ignoring a page that's genuinely sliding lets it keep sliding until it's expensive to recover. A short, ordered, explainable list — <em>look at these first, and here's why</em> — is worth more to that team than a dashboard of correlations.</p>
+    <p>This paper builds that list for one lane: <strong>Refresh / Content Opportunity Scoring</strong>. It scores pages by how likely they are to be entering a decline, cross-references that against a simpler, older signal (whether the page's click-through rate lags what similar-position pages typically get), and turns the result into a playbook — while being explicit, throughout, about how far the evidence actually reaches.</p>
+  </section>
+
+  <!-- DATA -->
+  <section id="data">
+    <div class="section-num">02 — Data</div>
+    <h2 class="head">Source, scope, and what got left out</h2>
+    <p>All analysis runs on the <a href="https://huggingface.co/datasets/FlyRank/internship-warehouse" target="_blank" rel="noopener">FlyRank internship warehouse</a> release, table <code class="num">fact_content_daily_performance</code>, partition <code class="num">month=2026-03</code> — a mid-panel month chosen deliberately over the final month in the release, which is sealed as a held-out test window and was never touched while building labels or features.</p>
+
+    <div class="stat-grid">
+      <div class="stat-cell"><div class="stat-num">9,841,378</div><div class="stat-lbl">daily performance rows in March 2026</div></div>
+      <div class="stat-cell"><div class="stat-num">55</div><div class="stat-lbl">clients represented</div></div>
+      <div class="stat-cell"><div class="stat-num">331,437</div><div class="stat-lbl">distinct content items</div></div>
+      <div class="stat-cell"><div class="stat-num">109,582</div><div class="stat-lbl">items with enough signal to score</div></div>
+    </div>
+
+    <h3 class="sub">The grain, verified</h3>
+    <p>One row = one content item, for one client, on one calendar day. Checked directly: grouping by <code class="num">(report_date, client_hash_id, content_hash_id)</code> and looking for groups larger than one returns <strong>zero rows</strong> — the grain holds.</p>
+
+    <h3 class="sub">What narrowed 331,437 down to 109,582</h3>
+    <div class="funnel">
+      <div class="funnel-label"><span>All content items, March 2026</span><b>331,437</b></div>
+      <div class="funnel-row"><div class="funnel-bar-track"><div class="funnel-bar-fill" style="width:100%"></div></div></div>
+      <div class="funnel-label" style="margin-top:18px"><span>Items clearing the 20-impression early-window floor</span><b>109,582 (33.1%)</b></div>
+      <div class="funnel-row"><div class="funnel-bar-track"><div class="funnel-bar-fill" style="width:33.1%"></div></div></div>
+    </div>
+    <p class="muted" style="font-size:15.5px">The remaining two-thirds had too little early-month traffic to score reliably — near-zero-impression pages, not a hidden population worth chasing with this method.</p>
+
+    <h3 class="sub">Deliberately excluded</h3>
+    <ul class="plain">
+      <li><strong>GA4 engagement columns.</strong> Checked with an explicit <code class="num">IS TRUE</code> filter (not a plain equality, which would misclassify a large NULL population as FALSE): only <strong>4.2%</strong> of rows have <code class="num">ga4_data_available = TRUE</code> (413,966 of 9,841,378; the rest split between FALSE and NULL). Too sparse to trust as a feature this round.</li>
+      <li><strong>The sealed test month (June 2026, the <code class="num">_sample</code> table).</strong> Never queried while developing labels or features — it's the natural answer key for any past→future label and stays untouched.</li>
+    </ul>
+  </section>
+
+  <!-- METHODOLOGY -->
+  <section id="method">
+    <div class="section-num">03 — Methodology</div>
+    <h2 class="head">Label, features, baseline, validation</h2>
+
+    <h3 class="sub">The label — a proxy, stated as one</h3>
+    <p><code class="num">is_declining</code> = 1 if a page's impressions in the second half of March (days 16–31) fell more than 20% below its first half (days 1–15), else 0. Base rate: <strong>29.1%</strong>. This is a within-month proxy for decline, not a validated ground truth — see Limitations.</p>
+
+    <h3 class="sub">Catching leakage before it could hide anywhere else</h3>
+    <p>Before trusting any feature, the notebook deliberately built one that shouldn't be trusted: a column computed directly from the outcome window itself. Training on it alongside the honest features moved AUC from a real <strong>0.597</strong> to a suspicious <strong>1.000</strong> — the label, smuggled back in. The column was removed and the honest number kept. That test is the standard every feature below had to clear.</p>
+
+    <h3 class="sub">Features — four, all pre-decision</h3>
+    <p>Four signals, each summed or averaged over days 1–15 of March only, so nothing used to score a page has seen the days its label is built from: <code class="num">imp_early</code>, <code class="num">clk_early</code>, <code class="num">ctr_early</code>, <code class="num">pos_early</code>.</p>
+    <p class="muted" style="font-size:15.5px">A fifth feature, <code class="num">days_active_early</code>, was tested and cut: permutation importance came back negative, and a direct with/without check confirmed it — held-out AUC rose from 0.472 to 0.544 once it was removed. Carrying a feature that measurably hurts into a production queue didn't survive being written down.</p>
+
+    <h3 class="sub">Baseline — a hand-written rule, checked before trusted</h3>
+    <p>A page is flagged if it has real volume, ranks well enough to be seen, and under-performs its position's typical click-through rate. Both assumptions behind that rule were tested, not assumed:</p>
+
+    <div class="ladder">
+      <div class="ladder-row"><div class="ladder-pos"><b>Top 3</b></div><div class="ladder-track"><div class="ladder-fill" style="width:100%"></div></div><div class="ladder-val">1.10%<div class="ladder-n">n=13,136</div></div></div>
+      <div class="ladder-row"><div class="ladder-pos">Page 1</div><div class="ladder-track"><div class="ladder-fill" style="width:46.8%"></div></div><div class="ladder-val">0.51%<div class="ladder-n">n=81,619</div></div></div>
+      <div class="ladder-row"><div class="ladder-pos">Page 2</div><div class="ladder-track"><div class="ladder-fill" style="width:30.0%"></div></div><div class="ladder-val">0.33%<div class="ladder-n">n=32,548</div></div></div>
+      <div class="ladder-row"><div class="ladder-pos">Page 3–5</div><div class="ladder-track"><div class="ladder-fill" style="width:20.8%"></div></div><div class="ladder-val">0.23%<div class="ladder-n">n=34,783</div></div></div>
+      <div class="ladder-row"><div class="ladder-pos">Deep (50+)</div><div class="ladder-track"><div class="ladder-fill" style="width:8.9%"></div></div><div class="ladder-val">0.10%<div class="ladder-n">n=13,218</div></div></div>
+    </div>
+    <p class="ladder-caption">Mean click-through rate by ranking position, March 2026 — the cliff after the top 3 results is exactly the pattern the CTR-fix logic assumes. It held.</p>
+
+    <p>The second assumption — a 500-impression floor before trusting a page's CTR — also held: below that floor, CTR standard deviation is <strong>0.0495</strong>; above it, roughly <strong>0.003</strong>, a ~16× difference in noise.</p>
+
+    <h3 class="sub">Validation — grouped, then audited again</h3>
+    <p>Random row splits were rejected on principle: with 41 clients averaging ~2,700 rows each, a random split all but guarantees the same client's other pages sit in both train and test. <code class="num">GroupKFold</code> on <code class="num">client_hash_id</code> was used instead — until auditing the split itself found a problem: one fold's test set landed on a <strong>single client</strong>, and base rates swung from 0.198 to 0.394 fold to fold. Switching to <code class="num">StratifiedGroupKFold</code> kept the client grouping but balanced label rates across folds, cutting the fold-to-fold standard deviation at precision@50 from 0.208 to 0.138.</p>
+
+    <p>Three methods were compared, in order of complexity: Logistic Regression, a depth-3 Decision Tree (shallow enough to read end to end), and Random Forest — the standard progression for a yes/no observed label evaluated as a ranking problem.</p>
+  </section>
+
+  <!-- RESULTS -->
+  <section id="results">
+    <div class="section-num">04 — Results</div>
+    <h2 class="head">The honest number, and the one that didn't survive</h2>
+    <p class="lede">Same data, same model, same K — three validation designs, three very different answers.</p>
+
+    <div class="precision-chart">
+      <div class="pbar-row">
+        <div class="pbar-label-line"><span class="name">Naive random row split <span class="tag">DO NOT QUOTE AS REAL</span></span><span class="val">0.596 <span class="tag">± 0.038</span></span></div>
+        <div class="pbar-track"><div class="pbar-fill bad" style="width:59.6%"></div><div class="base-line" style="left:29.1%"><span class="base-line-label" style="left:-14px">base 29.1%</span></div></div>
+      </div>
+      <div class="pbar-row">
+        <div class="pbar-label-line"><span class="name">GroupKFold by client <span class="tag">first honest attempt</span></span><span class="val">0.440 <span class="tag">± 0.208</span></span></div>
+        <div class="pbar-track"><div class="pbar-fill good" style="width:44.0%"></div><div class="base-line" style="left:29.1%"></div></div>
+      </div>
+      <div class="pbar-row">
+        <div class="pbar-label-line"><span class="name">StratifiedGroupKFold <span class="tag">final, reported number</span></span><span class="val">0.448 <span class="tag">± 0.138</span></span></div>
+        <div class="pbar-track"><div class="pbar-fill good" style="width:44.8%"></div><div class="base-line" style="left:29.1%"></div></div>
+      </div>
+    </div>
+    <p class="muted" style="font-size:14.5px">Precision@50, mean ± std across 5 grouped folds. Grey line = base rate (29.1%) — what you'd get flagging pages at random. Note how much tighter the naive split's std looks — that's part of what makes it deceptively convincing.</p>
+
+    <div class="callout warn">
+      <p><strong>Why the naive number is wrong, not just different.</strong> A plain 80/20 random split on the same rows and the same model reports 0.596 — a fifteen-point improvement over the honest number, and a tighter-looking std (0.038 vs 0.138). Both are artifacts of the same cause: with only 41 clients, a random split leaks each client's other pages across train and test, letting the model partly memorize client-level baselines instead of learning transferable signal. The grouped number is the real one.</p>
+    </div>
+
+    <h3 class="sub">Does the model beat the honest baseline?</h3>
+    <p>Directionally, yes — Logistic Regression reaches <strong>0.440</strong> at precision@50 under GroupKFold vs. the early-window CTR-gap rule's <strong>0.420</strong>, and the pattern holds at precision@200 (0.444 vs. 0.342). But the 0.02 gap at K=50 sits well inside a 0.117–0.208 fold-to-fold standard deviation, given only 41 clients. This is <strong>decision-support evidence, not a confirmed win</strong> — worded exactly that carefully because the evidence doesn't stretch further.</p>
+
+    <h3 class="sub">What the model gets wrong</h3>
+    <p>Permutation importance ranks <code class="num">ctr_early</code>, <code class="num">pos_early</code>, and <code class="num">imp_early</code> as carrying real signal (0.042–0.048); <code class="num">clk_early</code> is weaker (0.019). Errors concentrate in <strong>page_1</strong> positions (30.8% error rate) — the mid-pack zone where a page could plausibly tip either way. False negatives tend to look stable across the 15-day window and decline anyway — nothing in a snapshot that short catches a late-month event. False positives tend to be low-CTR, deep-position pages that simply recovered on their own.</p>
+  </section>
+
+  <!-- LIMITATIONS -->
+  <section id="limitations">
+    <div class="section-num">05 — Limitations &amp; honest framing</div>
+    <h2 class="head">What this cannot claim</h2>
+    <ul class="plain">
+      <li><strong>The model's edge over the baseline is directional, not confirmed.</strong> 0.448 vs. 0.420 at precision@50 sits inside the fold-to-fold noise from a 41-client sample.</li>
+      <li><strong>The label is a within-month proxy, not ground truth.</strong> A real impression decline could be seasonal, a client-side site change, or a shifting SERP feature — none of which "refresh the content" fixes. This model flags a pattern, not a diagnosis.</li>
+      <li><strong>One month, one warehouse release, ~41–55 clients.</strong> No claim this generalizes to a different season, a different client mix, or a different search vertical without re-validation.</li>
+      <li><strong>Click data is sparse.</strong> Median CTR is exactly 0 in most position buckets — the aggregate CTR-cliff pattern held, but any single page's CTR-gap flag is noisy.</li>
+      <li><strong>This is decision-support for a human review queue</strong> — not an automated action system, and not a claim about how any search engine's ranking algorithm works.</li>
+    </ul>
+  </section>
+
+  <!-- RECOMMENDATIONS -->
+  <section id="recommendations">
+    <div class="section-num">06 — Ranked recommendations</div>
+    <h2 class="head">The action playbook</h2>
+    <p class="lede">Two independent signals — decline risk and CTR-vs-position gap — crossed into four archetypes, each with a different action. Rank order within each is by decline probability.</p>
+
+    <div class="archetype-grid">
+      <div class="archetype-card priority">
+        <div class="rank-pct">14.8%</div>
+        <div class="rank-n">16,216 pages</div>
+        <div class="rank-name">Priority refresh + snippet</div>
+        <div class="rank-desc">Elevated decline risk <em>and</em> a CTR gap — two independent signals agree. Rewrite content and refresh title/meta.</div>
+      </div>
+      <div class="archetype-card content">
+        <div class="rank-pct">35.2%</div>
+        <div class="rank-n">38,575 pages</div>
+        <div class="rank-name">Content refresh needed</div>
+        <div class="rank-desc">Elevated risk, but CTR is normal for its position — a snippet tweak alone won't fix this. Needs a real content look.</div>
+      </div>
+      <div class="archetype-card snippet">
+        <div class="rank-pct">0.8%</div>
+        <div class="rank-n">894 pages</div>
+        <div class="rank-name">Snippet cleanup backlog</div>
+        <div class="rank-desc">Low decline risk but has a CTR gap. Real, but not urgent — queue it.</div>
+      </div>
+      <div class="archetype-card monitor">
+        <div class="rank-pct">49.2%</div>
+        <div class="rank-n">53,897 pages</div>
+        <div class="rank-name">Monitor only</div>
+        <div class="rank-desc">Neither signal fires this pass. No action — re-check next cycle.</div>
+      </div>
+    </div>
+
+    <h3 class="sub">Required human checks before acting</h3>
+    <ol class="plain" style="padding-left:20px">
+      <li>Confirm the decline isn't explained by a known client-side event (template change, expired product, deliberate pivot) before recommending content work.</li>
+      <li>For refresh/snippet archetypes, check whether a SERP feature is now absorbing clicks at that position before assuming the title or meta is the problem.</li>
+      <li>Treat rows near the 500-impression floor with extra skepticism — CTR is noisiest right around that threshold.</li>
+    </ol>
+
+    <h3 class="sub">Should not be automated</h3>
+    <ul class="nogo-list">
+      <li><span class="x">✕</span> Auto-publishing rewritten content, titles, or meta descriptions without a human edit pass.</li>
+      <li><span class="x">✕</span> Auto-archiving or deprioritizing "monitor only" pages — absence of this signal isn't proof of health.</li>
+      <li><span class="x">✕</span> Using the decline-probability score as a client-facing health score or contractual SLA metric.</li>
+      <li><span class="x">✕</span> Treating this list as exhaustive site-wide prioritization — it covers one lane, one month, one client cohort.</li>
+    </ul>
+
+    <h3 class="sub">Monitoring &amp; retrain triggers</h3>
+    <table class="data-table">
+      <tr><th>Signal</th><th>Trigger</th></tr>
+      <tr><td>Precision drift</td><td>Re-scored precision@50 falls below the ~0.42 baseline-rule floor</td></tr>
+      <tr><td>Feature drift</td><td>imp/ctr/pos distributions shift &gt;20–30% vs. the March baseline</td></tr>
+      <tr><td>Client churn</td><td>Client roster changes by more than ~20% of the 41-client base</td></tr>
+      <tr><td>CTR sparsity change</td><td>Median CTR stops being ~0 in most position buckets (reporting/policy shift)</td></tr>
+      <tr><td>Cadence</td><td>Monthly at minimum — the label is a within-month proxy by construction</td></tr>
+    </table>
+  </section>
+
+  <!-- REPRODUCIBILITY -->
+  <section id="repro">
+    <div class="section-num">07 — Reproducibility</div>
+    <h2 class="head">Every number here traces to a notebook</h2>
+    <p>All work runs in Colab against the gated Hugging Face warehouse release, with <code class="num">random_state=42</code> fixed throughout model fitting and splitting. Each notebook below is self-contained and re-runnable.</p>
+    <div class="repro-grid">
+      <a class="repro-item" href="https://github.com/Mehroz485/ML-01/blob/main/work/notebooks/w03_data_contract.ipynb" target="_blank" rel="noopener"><span class="w">W03</span><span class="t">Data contract — grain, availability, leakage trap</span></a>
+      <a class="repro-item" href="https://github.com/Mehroz485/ML-01/blob/main/work/notebooks/w04_baseline_score.ipynb" target="_blank" rel="noopener"><span class="w">W04</span><span class="t">Baseline rule — signal checks, ranked queue</span></a>
+      <a class="repro-item" href="https://github.com/Mehroz485/ML-01/blob/main/work/notebooks/w05_model.ipynb" target="_blank" rel="noopener"><span class="w">W05</span><span class="t">Model vs. baseline — grouped validation</span></a>
+      <a class="repro-item" href="https://github.com/Mehroz485/ML-01/blob/main/work/notebooks/w06_validation_audit.ipynb" target="_blank" rel="noopener"><span class="w">W06</span><span class="t">Validation audit — before/after, claim rewrites</span></a>
+      <a class="repro-item" href="https://github.com/Mehroz485/ML-01/blob/main/work/notebooks/w07_action_playbook.ipynb" target="_blank" rel="noopener"><span class="w">W07</span><span class="t">Action playbook — archetypes, exports</span></a>
+      <a class="repro-item" href="https://github.com/Mehroz485/ML-01/blob/main/work/notebooks/capstone.ipynb" target="_blank" rel="noopener"><span class="w">Capstone</span><span class="t">End-to-end notebook mirroring this page</span></a>
+    </div>
+    <p class="muted" style="font-size:15px">Full repository: <a href="https://github.com/Mehroz485/ML-01" target="_blank" rel="noopener">github.com/Mehroz485/ML-01</a></p>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="credit-box">
+      <p style="margin-bottom:0">Built on the <strong>FlyRank ML Internship dataset</strong> — <a href="https://flyrank.ai" target="_blank" rel="noopener">flyrank.ai</a>. No client names, domains, URLs, or private queries appear anywhere in this analysis; all identifiers are pseudonymized at the source.</p>
+    </div>
+    <a class="back-top" href="#top">↑ back to top</a>
+  </div>
+</footer>
+
+</body>
+</html>
